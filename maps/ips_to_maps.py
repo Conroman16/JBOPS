@@ -63,7 +63,7 @@ PLATFORM_COLORS = {'Android': '#a4c639', # Green
                    'Xbox One':'#ffffff', # White
                    'Chrome':'#ff0000', # Red
                    'Playstation 4':'#0000ff', # Blue
-                   'iOS':'#8b4513', # Poop brown
+                   'iOS':'#000000', # White (poop brown was hard to see and clearly the original author was Android biased)
                    'Samsung': '#0c4da2', # Blue
                    'Windows': DEFAULT_COLOR,
                    'Xbox 360 App': DEFAULT_COLOR}
