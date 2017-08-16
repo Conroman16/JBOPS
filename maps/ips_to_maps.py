@@ -19,6 +19,7 @@ optional arguments:
                         Filename of map. None will not save. (default: Map_YYYYMMDD-HHMMSS)
   -j [], --json []      Filename of json file to use.
                         (choices: {List of .json files in current dir})
+  --headless            Run headless.
 
 
 """
@@ -94,21 +95,32 @@ class UserIPs(object):
         self.play_count = d['play_count']
         self.platform = d['platform']
 
-def get_get_users_tables(users):
-    # Get the user IP list from PlexPy
-    payload = {'apikey': PLEXPY_APIKEY,
-               'cmd': 'get_users_table'}
+def get_get_users_tables(users='', length=''):
+    # Get the users list from PlexPy
+
+    if length:
+        payload = {'apikey': PLEXPY_APIKEY,
+                   'cmd': 'get_users_table',
+                   'length': length}
+    else:
+        payload = {'apikey': PLEXPY_APIKEY,
+                   'cmd': 'get_users_table'}
 
     try:
         r = requests.get(PLEXPY_URL.rstrip('/') + '/api/v2', params=payload)
         response = r.json()
         res_data = response['response']['data']['data']
-        if users == 'all':
-            return [d['user_id'] for d in res_data]
-        elif users == 'friendly_name':
-            return [d['friendly_name'] for d in res_data]
+        if not length and not users:
+            # Return total user count
+            return response['response']['data']['recordsTotal']
         else:
-            return [d['user_id'] for user in users for d in res_data if user == d['friendly_name']]
+            if users == 'all':
+                return [d['user_id'] for d in res_data]
+            elif users == 'friendly_name':
+                return [d['friendly_name'] for d in res_data]
+            else:
+                return [d['user_id'] for user in users for d in res_data if user == d['friendly_name']]
+
     except Exception as e:
         sys.stderr.write("PlexPy API 'get_get_users_tables' request failed: {0}.".format(e))
 
@@ -136,7 +148,6 @@ def get_geoip_info(ip_address=''):
     try:
         r = requests.get(PLEXPY_URL.rstrip('/') + '/api/v2', params=payload)
         response = r.json()
-        # print(json.dumps(response, indent=4, sort_keys=True))
         if response['response']['result'] == 'success':
             data = response['response']['data']
             if data.get('error'):
@@ -148,7 +159,7 @@ def get_geoip_info(ip_address=''):
             raise Exception(response['response']['message'])
     except Exception as e:
         sys.stderr.write("PlexPy API 'get_geoip_lookup' request failed: {0}.".format(e))
-        return GeoData()
+        pass
 
 def get_stream_type_by_top_10_platforms():
     # Get the user IP list from PlexPy
@@ -176,11 +187,12 @@ def get_geo_dict(length, users):
     geo_dict = {SERVER_FRIENDLY: [{'lon': SERVER_LON, 'lat': SERVER_LAT, 'city': SERVER_CITY, 'region': SERVER_STATE,
                                    'ip': REPLACEMENT_WAN_IP, 'play_count': 0, 'platform': SERVER_PLATFORM,
                                    'location_count': 0}]}
-    try:
-        for i in get_get_users_tables(users):
-            user_ip = get_get_users_ips(user_id=i, length=length)
-            city_cnt = 0
-            for a in user_ip:
+
+    for i in get_get_users_tables(users):
+        user_ip = get_get_users_ips(user_id=i, length=length)
+        city_cnt = 0
+        for a in user_ip:
+            try:
                 ip = a.ip_address
                 if ip.startswith(LAN_SUBNET) and REPLACEMENT_WAN_IP:
                     ip = REPLACEMENT_WAN_IP
@@ -191,10 +203,12 @@ def get_geo_dict(length, users):
                                                             'city': str(g.city), 'region': str(g.region),
                                                              'ip': ip, 'play_count': a.play_count,
                                                              'platform':a.platform, 'location_count': city_cnt})
-
-    except Exception as e:
-        print(e)
-        pass
+            except AttributeError:
+                print('User: {} IP: {} caused error in geo_dict.'.format(a.friendly_name, a.ip_address))
+                pass
+            except Exception as e:
+                print('Error here: {}'.format(e))
+                pass
     return geo_dict
 
 def get_geojson_dict(user_locations):
@@ -241,10 +255,13 @@ def get_geojson_dict(user_locations):
         "features": locs
     }
 
-def draw_map(map_type, geo_dict, filename):
+def draw_map(map_type, geo_dict, filename, headless):
+    import matplotlib as mpl
+    if headless:
+        mpl.use("Agg")
     import matplotlib.pyplot as plt
     from mpl_toolkits.basemap import Basemap
-    import matplotlib as mpl
+    
     ## Map stuff ##
     plt.figure(figsize=(16, 9), dpi=100, frameon=False, tight_layout=True)
     lon_r = 0
@@ -286,7 +303,11 @@ def draw_map(map_type, geo_dict, filename):
                 zord = 3
                 alph = 1
             else:
-                color = PLATFORM_COLORS[data['platform']]
+                if data['platform'] in PLATFORM_COLORS:
+                    color = PLATFORM_COLORS[data['platform']]
+                else:
+                    color = DEFAULT_COLOR
+                    print('Platform: {} is missing from PLATFORM_COLORS. Using DEFAULT_COLOR.'.format(data['platform']))
                 marker = '.'
                 if data['play_count'] >= 100:
                     markersize = (data['play_count'] * .1)
@@ -343,19 +364,20 @@ def draw_map(map_type, geo_dict, filename):
             plt.setp(text, color='#A5A5A7')
 
     plt.title(title_string)
-    mng = plt.get_current_fig_manager()
-    ### works on Ubuntu??? >> did NOT working on windows
-    # mng.resize(*mng.window.maxsize())
-    mng.window.state('zoomed')
     if filename:
         plt.savefig('{}.png'.format(filename))
-    plt.show()
+        print('Image saved as: {}.png'.format(filename))
+    if not headless:
+        mng = plt.get_current_fig_manager()
+        mng.window.state('zoomed')
+        plt.show()
 
 
 if __name__ == '__main__':
 
     timestr = time.strftime("%Y%m%d-%H%M%S")
-    user_lst = get_get_users_tables('friendly_name')
+    user_count = get_get_users_tables()
+    user_lst = sorted(get_get_users_tables('friendly_name', user_count))
     json_check = sorted([f for f in os.listdir('.') if os.path.isfile(f) and f.endswith(".json")], key=os.path.getmtime)
     parser = argparse.ArgumentParser(description="Use PlexPy to draw map of user locations base on IP address.",
                                      formatter_class=argparse.RawTextHelpFormatter)
@@ -376,7 +398,7 @@ if __name__ == '__main__':
                         help='Filename of map. None will not save. \n(default: %(default)s)')
     parser.add_argument('-j', '--json', nargs='?', type=str, choices=json_check, metavar='',
                         help='Filename of json file to use. \n(choices: %(choices)s)')
-
+    parser.add_argument('--headless', help='Run headless.', action='store_true')
 
     opts = parser.parse_args()
     if opts.json:
@@ -423,4 +445,4 @@ if __name__ == '__main__':
         print(r.json()['html_url'])
         webbrowser.open(r.json()['html_url'])
     else:
-        draw_map(opts.location, geo_json, filename)
+        draw_map(opts.location, geo_json, filename, opts.headless)
